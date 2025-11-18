@@ -9,16 +9,44 @@ import os
 from fpdf import FPDF
 import random
 import time
+import json
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Veri-fly | GenAI KYC", page_icon="🛡️", layout="centered")
 
+# --- TRANSLATION DICTIONARY ---
+translations = {
+    "en": {
+        "welcome": "Welcome to Veri-fly. Please upload a clear image of your ID card.",
+        "happy": "Please smile for the camera!",
+        "surprise": "Look surprised!",
+        "neutral": "Stay neutral and look at the camera.",
+        "verified": "Identity verified successfully. Welcome to the platform."
+    },
+    "hi": {
+        "welcome": "Veri-fly mein aapka swagat hai. Krupaya apne ID card ki saaf photo upload karein.",
+        "happy": "Krupaya camera ke liye muskuraiye!",
+        "surprise": "Chaukit dikhiye!",
+        "neutral": "Gambhir rahiye aur camera ki taraf dekhiye.",
+        "verified": "Pehchan safaltapurvak satyapit ho gayi hai. Swagat hai."
+    },
+    "ta": {
+        "welcome": "Veri-fly ku nalvaravu. Ungal ID attaiyin thelivana padathai upload seiyavum.",
+        "happy": "Dayavuseithu camera-vai paarthu sirikkavum!",
+        "surprise": "Aacharyamaaga paarkavum!",
+        "neutral": "Amaithiyaaga camera-vai paarkavum.",
+        "verified": "Ungal adayalam urudhi seiyappattathu. Nalvaravu."
+    }
+}
+
 # --- HELPER FUNCTIONS ---
 
-def speak(text):
-    """Generates a voice guide using gTTS."""
+def speak(text, lang='en'):
+    """Generates a voice guide using gTTS in the selected language."""
     try:
-        tts = gTTS(text=text, lang='en')
+        # Map 'hi' and 'ta' to gTTS supported codes if needed, 
+        # but gTTS supports 'hi' and 'ta' directly.
+        tts = gTTS(text=text, lang=lang)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
             tts.save(fp.name)
             st.audio(fp.name, format='audio/mp3', start_time=0)
@@ -37,7 +65,7 @@ def get_gemini_extraction_simulated(image):
     return """{
     "Name": "Roobika T",
     "DOB": "01-01-2000",
-    "ID_Type": "Aadhaar Card",
+    "ID_Type": "ID Card",
     "Address": "Peelamedu, Coimbatore-641004",
     "Status": "Clear / Readable"
 }"""
@@ -57,10 +85,12 @@ def generate_certificate(name, verification_id, user_photo):
     pdf.cell(200, 10, txt=f"Verified Name: {name}", ln=True)
     pdf.cell(200, 10, txt=f"Verification ID: {verification_id}", ln=True)
     pdf.cell(200, 10, txt="Status: VERIFIED SUCCESSFUL", ln=True)
+    pdf.ln(10) # Add space so photo doesn't overlap text
     
     if user_photo:
         user_photo.save("cert_face.jpg")
-        pdf.image("cert_face.jpg", x=10, y=80, w=50)
+        # Fixed Y position to 110 to avoid overlapping text
+        pdf.image("cert_face.jpg", x=80, y=110, w=50) 
     
     output_filename = "KYC_Certificate.pdf"
     pdf.output(output_filename)
@@ -71,9 +101,21 @@ def generate_certificate(name, verification_id, user_photo):
 st.title("🛡️ Veri-fly")
 st.caption("Unbound with GenAI: Vision, Voice & Verification")
 
-# Sidebar for API Key (Visual Only for Demo)
+# Sidebar for Configuration
 with st.sidebar:
     st.header("Configuration")
+    
+    # 1. Language Selector
+    lang_choice = st.selectbox("Select Language", ["English", "Hindi", "Tamil"])
+    
+    # Map selection to code
+    lang_code = 'en'
+    if lang_choice == "Hindi":
+        lang_code = 'hi'
+    elif lang_choice == "Tamil":
+        lang_code = 'ta'
+
+    # 2. API Key Input (Visual Only)
     api_key = st.text_input("Enter Google Gemini API Key", type="password")
     if not api_key:
         st.info("Enter any key to enable the AI.")
@@ -93,30 +135,29 @@ if st.session_state.step == 1:
     st.header("Step 1: AI Document Vision")
     st.info("Upload any ID (Aadhaar, PAN, License). Gemini Vision will read it.")
     
+    # Voice Guide for Step 1
+    if st.button("🔊 Hear Instructions"):
+        speak(translations[lang_code]["welcome"], lang_code)
+    
     uploaded_file = st.file_uploader("Upload ID Card", type=['png', 'jpg', 'jpeg'])
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
         st.image(image, caption='Uploaded ID', use_column_width=True)
         
-        # Check if extraction has already happened to prevent re-running
-        if not st.session_state.extracted_data: # Only run extraction once
+        # Check if extraction has already happened
+        if not st.session_state.extracted_data:
             if st.button("Analyze with Gemini AI"):
-                # Simulation Mode
                 with st.spinner("Gemini Vision is reading your ID..."):
                     result = get_gemini_extraction_simulated(image)
-                    
                     st.session_state.extracted_data = result
                     st.session_state.id_image = image
-                    
                     st.success("✅ Gemini Extraction Complete!")
                     st.code(result, language='json')
-                    # No rerun here, let it finish and then show Confirm & Next
-        else: # If data is already extracted, just display it
+        else:
             st.success("✅ Gemini Extraction Complete!")
             st.code(st.session_state.extracted_data, language='json')
             
-        # This button is now outside the 'Analyze' click, so it persists
         if st.button("Confirm & Next", key="confirm_next_step1"):
             st.session_state.step = 2
             st.rerun()
@@ -125,19 +166,17 @@ if st.session_state.step == 1:
 elif st.session_state.step == 2:
     st.header("Step 2: Active Liveness Check")
     
-    # Challenge the user
-    challenge_text = ""
-    if st.session_state.challenge == "happy":
-        challenge_text = "Please SMILE for the camera! 😃"
-    elif st.session_state.challenge == "surprise":
-        challenge_text = "Look SURPRISED! 😲"
-    else:
-        challenge_text = "Stay NEUTRAL (Serious face). 😐"
-        
-    st.info(f"Security Challenge: **{challenge_text}**")
+    # Get the challenge type
+    c_type = st.session_state.challenge
     
+    # text to display (always English for UI clarity, or you can map this too)
+    challenge_display = f"Action Required: **{c_type.upper()}**"
+    st.info(challenge_display)
+    
+    # Voice Guide for Challenge (In selected language)
     if st.button("🔊 Hear Challenge"):
-        speak(challenge_text)
+        msg = translations[lang_code][c_type]
+        speak(msg, lang_code)
 
     selfie = st.camera_input("Take a Selfie")
     
@@ -147,16 +186,15 @@ elif st.session_state.step == 2:
         
         try:
             # DeepFace analyzes emotion
-            # If DeepFace fails, we fallback to simulation so video doesn't break
             try:
                 analysis = DeepFace.analyze("temp_liveness.jpg", actions=['emotion'], enforce_detection=False)
                 detected_emotion = analysis[0]['dominant_emotion']
             except:
-                detected_emotion = st.session_state.challenge # Force pass if model fails for demo
+                detected_emotion = c_type # Fallback for demo
             
             st.write(f"**AI Detected:** {detected_emotion.upper()}")
             
-            # Relaxed logic for demo (always passes liveness)
+            # Relaxed logic for demo
             passed = True 
                 
             if passed:
@@ -187,8 +225,9 @@ elif st.session_state.step == 3:
             st.balloons()
             st.success(f"✅ VERIFIED! Match Distance: 0.23")
             
-            # Safely get name from extracted_data (assuming it's JSON string)
-            import json
+            # Speak success message
+            speak(translations[lang_code]["verified"], lang_code)
+            
             try:
                 extracted_json = json.loads(st.session_state.extracted_data)
                 verified_name = extracted_json.get("Name", "Demo User")
@@ -202,8 +241,8 @@ elif st.session_state.step == 3:
 
     if st.button("Start Over", key="start_over_step3"):
         st.session_state.step = 1
-        st.session_state.extracted_data = {} # Clear extracted data
+        st.session_state.extracted_data = {}
         st.session_state.id_image = None
         st.session_state.user_photo = None
-        st.session_state.challenge = random.choice(["happy", "surprise", "neutral"]) # Reset challenge
+        st.session_state.challenge = random.choice(["happy", "surprise", "neutral"])
         st.rerun()
