@@ -44,8 +44,6 @@ translations = {
 def speak(text, lang='en'):
     """Generates a voice guide using gTTS in the selected language."""
     try:
-        # Map 'hi' and 'ta' to gTTS supported codes if needed, 
-        # but gTTS supports 'hi' and 'ta' directly.
         tts = gTTS(text=text, lang=lang)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
             tts.save(fp.name)
@@ -169,7 +167,7 @@ elif st.session_state.step == 2:
     # Get the challenge type
     c_type = st.session_state.challenge
     
-    # text to display (always English for UI clarity, or you can map this too)
+    # text to display (always English for UI clarity)
     challenge_display = f"Action Required: **{c_type.upper()}**"
     st.info(challenge_display)
     
@@ -194,7 +192,7 @@ elif st.session_state.step == 2:
             
             st.write(f"**AI Detected:** {detected_emotion.upper()}")
             
-            # Relaxed logic for demo
+            # Relaxed logic for demo (Simulated Pass)
             passed = True 
                 
             if passed:
@@ -219,25 +217,49 @@ elif st.session_state.step == 3:
         st.image(st.session_state.user_photo, caption="Verified Selfie")
         
     if st.button("Run Final Match"):
-        with st.spinner("Verifying Identity..."):
-            time.sleep(2) # Simulation delay
+        with st.spinner("Verifying Identity (Running ArcFace AI)..."):
             
-            st.balloons()
-            st.success(f"✅ VERIFIED! Match Distance: 0.23")
-            
-            # Speak success message
-            speak(translations[lang_code]["verified"], lang_code)
+            # 1. Save images for DeepFace to read
+            st.session_state.id_image.convert("RGB").save("temp_id.jpg")
+            st.session_state.user_photo.convert("RGB").save("temp_live.jpg")
             
             try:
-                extracted_json = json.loads(st.session_state.extracted_data)
-                verified_name = extracted_json.get("Name", "Demo User")
-            except:
-                verified_name = "Demo User"
+                # 2. Run Actual AI Verification (Using ArcFace Model)
+                # Note: The first run will take time to download the model (~100MB)
+                result = DeepFace.verify(
+                    img1_path="temp_id.jpg", 
+                    img2_path="temp_live.jpg", 
+                    model_name="ArcFace", 
+                    detector_backend="opencv", 
+                    distance_metric="cosine"
+                )
+                
+                # 3. Check Result
+                if result['verified']:
+                    st.balloons()
+                    st.success(f"✅ VERIFIED! Match Distance: {round(result['distance'], 4)}")
+                    
+                    # Speak success message
+                    speak(translations[lang_code]["verified"], lang_code)
+                    
+                    try:
+                        extracted_json = json.loads(st.session_state.extracted_data)
+                        verified_name = extracted_json.get("Name", "Demo User")
+                    except:
+                        verified_name = "Demo User"
 
-            pdf_file = generate_certificate(verified_name, "UID-12345", st.session_state.user_photo)
+                    pdf_file = generate_certificate(verified_name, "UID-12345", st.session_state.user_photo)
+                    
+                    with open(pdf_file, "rb") as f:
+                        st.download_button("📜 Download KYC Certificate", f, file_name="My_KYC.pdf")
+                else:
+                    st.error("❌ Face Mismatch. Identity verification failed.")
+                    st.warning(f"Security Alert: Faces do not match. Distance: {round(result['distance'], 4)}")
             
-            with open(pdf_file, "rb") as f:
-                st.download_button("📜 Download KYC Certificate", f, file_name="My_KYC.pdf")
+            except Exception as e:
+                st.error(f"AI Error: {e}")
+                # Fallback for demo if internet fails
+                st.info("⚠️ Note: Model download may have failed. Check internet.")
 
     if st.button("Start Over", key="start_over_step3"):
         st.session_state.step = 1
